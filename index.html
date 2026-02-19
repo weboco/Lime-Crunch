@@ -8,26 +8,34 @@
     * {
       box-sizing: border-box;
       font-family: 'Comic Neue', 'Segoe UI', 'Fredoka', cursive, sans-serif;
+      margin: 0;
+      padding: 0;
+    }
+    html, body {
+      width: 100%;
+      min-height: 100vh;
+      overflow-x: hidden;
+      overflow-y: auto;
     }
     body {
-      margin: 0;
-      min-height: 100vh;
       background: linear-gradient(145deg, #ffd1dc 0%, #ffe4f3 100%);
       display: flex;
       justify-content: center;
       align-items: center;
       position: relative;
-      overflow: hidden;
+      padding: 20px;
     }
     /* Floating hearts background */
     body::before {
       content: "❤️🧡💛💚💙💜";
-      position: absolute;
+      position: fixed;
       font-size: 40px;
       opacity: 0.1;
       white-space: nowrap;
       animation: float 20s linear infinite;
       width: 200%;
+      pointer-events: none;
+      z-index: 0;
     }
     @keyframes float {
       0% { transform: translateX(-100%) rotate(0deg); }
@@ -41,6 +49,9 @@
       border: 4px solid white;
       position: relative;
       z-index: 2;
+      width: fit-content;
+      max-width: 100%;
+      margin: 20px auto;
     }
     canvas {
       display: block;
@@ -49,6 +60,9 @@
       box-shadow: 0 0 0 6px white, 0 20px 30px rgba(255, 100, 150, 0.5);
       background-color: #ffeef5;
       cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><text x="0" y="20" font-size="20">🐍</text></svg>') 12 12, auto;
+      max-width: 100%;
+      height: auto;
+      width: 800px;
     }
     .panel {
       display: flex;
@@ -94,6 +108,7 @@
     .skin-selector {
       display: flex;
       gap: 0.8rem;
+      flex-wrap: wrap;
     }
     .skin-btn {
       width: 3rem;
@@ -105,13 +120,13 @@
       box-shadow: 0 4px 0 #ffb0cc;
     }
     .skin-btn[data-skin="0"] {
-      background: #c3ff9e;
+      background: #ffff7f;  /* Yellow */
     }
     .skin-btn[data-skin="1"] {
-      background: repeating-linear-gradient(45deg, #fffac2 0px, #fffac2 8px, #ffe69b 8px, #ffe69b 16px);
+      background: #bfff6f;  /* Lime */
     }
     .skin-btn[data-skin="2"] {
-      background: radial-gradient(circle at 40% 40%, #b4ffb4, #9fd99f);
+      background: #b4ffb4;  /* Light green */
     }
     .skin-btn.selected {
       border-color: #ff4d8c;
@@ -135,6 +150,7 @@
       background: #fff9fc;
       padding: 0.5rem;
       border-radius: 2rem;
+      word-break: break-all;
     }
     h2 {
       text-align: center;
@@ -142,6 +158,29 @@
       margin: 0 0 0.5rem 0;
       font-size: 2rem;
       text-shadow: 2px 2px 0 white;
+    }
+    .loading {
+      text-align: center;
+      color: #ff69a4;
+      font-size: 1.2rem;
+      margin-top: 1rem;
+    }
+    /* Mobile responsiveness */
+    @media (max-width: 900px) {
+      .game-container {
+        padding: 1rem;
+      }
+      canvas {
+        width: 100%;
+        height: auto;
+      }
+      .panel {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .left {
+        justify-content: center;
+      }
     }
   </style>
   <script src="/socket.io/socket.io.js"></script>
@@ -156,15 +195,16 @@
       <div class="left">
         <input type="text" id="nameInput" placeholder="Your name" maxlength="16" value="Cutie">
         <div class="skin-selector" id="skinSelector">
-          <div class="skin-btn selected" data-skin="0" title="Lime cutie"></div>
-          <div class="skin-btn" data-skin="1" title="Honey stripes"></div>
-          <div class="skin-btn" data-skin="2" title="Mint checker"></div>
+          <div class="skin-btn selected" data-skin="0" title="Yellow cutie"></div>
+          <div class="skin-btn" data-skin="1" title="Lime cutie"></div>
+          <div class="skin-btn" data-skin="2" title="Light green cutie"></div>
         </div>
         <button id="joinBtn">✨ Play ✨</button>
       </div>
       <div class="scoreboard" id="scoreboard">Players: 0</div>
     </div>
     <div class="share-link" id="shareUrl"></div>
+    <div class="loading" id="loadingStatus">Connecting to server...</div>
   </div>
 
   <script>
@@ -174,8 +214,14 @@
     const joinBtn = document.getElementById('joinBtn');
     const scoreboard = document.getElementById('scoreboard');
     const shareUrl = document.getElementById('shareUrl');
+    const loadingStatus = document.getElementById('loadingStatus');
 
-    const socket = io();
+    // Better socket connection for Render
+    const socket = io({
+      transports: ['websocket', 'polling'],
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000
+    });
 
     let players = {};
     let food = [];
@@ -183,6 +229,26 @@
     let currentSkin = 0;
 
     shareUrl.textContent = `💖 Share this link with friends! 💖 ${window.location.href}`;
+
+    // Connection status
+    socket.on('connect', () => {
+      console.log('Connected to server!');
+      loadingStatus.textContent = '✅ Connected! Loading game...';
+      myId = socket.id;
+    });
+
+    socket.on('connect_error', (error) => {
+      console.log('Connection error:', error);
+      loadingStatus.textContent = '❌ Connection error. Refreshing...';
+      setTimeout(() => {
+        window.location.reload();
+      }, 3000);
+    });
+
+    socket.on('disconnect', () => {
+      console.log('Disconnected from server');
+      loadingStatus.textContent = '🔄 Disconnected. Reconnecting...';
+    });
 
     document.querySelectorAll('.skin-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -198,6 +264,7 @@
     joinBtn.addEventListener('click', () => {
       const name = nameInput.value.trim() || 'Cutie';
       socket.emit('join', { name, skin: currentSkin });
+      loadingStatus.textContent = '✨ Joining game...';
     });
 
     window.addEventListener('keydown', (e) => {
@@ -218,15 +285,12 @@
     socket.on('gameState', (state) => {
       players = state.players;
       food = state.food;
-      if (!myId && socket.id) {
-        myId = socket.id;
-      }
+      loadingStatus.textContent = '🎮 Game loaded!';
+      setTimeout(() => {
+        loadingStatus.style.display = 'none';
+      }, 2000);
       updateScoreboard();
       drawCanvas();
-    });
-
-    socket.on('connect', () => {
-      myId = socket.id;
     });
 
     function updateScoreboard() {
@@ -244,36 +308,39 @@
 
       ctx.save();
       
-      // Draw rounded squares for cuteness
       ctx.shadowColor = '#ffb6d9';
       ctx.shadowBlur = 8;
       
-      if (skin === 0) {
-        ctx.fillStyle = '#c3ff9e';
+      // Colors: 0=Yellow, 1=Lime, 2=Light Green
+      if (skin === 0) { // Yellow
+        ctx.fillStyle = '#ffff7f';
         ctx.beginPath();
         ctx.roundRect(rectX, rectY, w, h, 5);
         ctx.fill();
-      } else if (skin === 1) {
-        ctx.fillStyle = '#fffac2';
+      } else if (skin === 1) { // Lime
+        ctx.fillStyle = '#bfff6f';
         ctx.beginPath();
         ctx.roundRect(rectX, rectY, w, h, 5);
         ctx.fill();
-        // stripes
-        ctx.strokeStyle = '#ffe69b';
-        ctx.lineWidth = 2;
-        for (let i = 0; i < 3; i++) {
-          ctx.beginPath();
-          ctx.moveTo(rectX + i*6, rectY);
-          ctx.lineTo(rectX + i*6, rectY + h);
-          ctx.stroke();
-        }
-      } else if (skin === 2) {
-        const grad = ctx.createRadialGradient(rectX+4, rectY+4, 2, rectX+10, rectY+10, 15);
-        grad.addColorStop(0, '#b4ffb4');
-        grad.addColorStop(1, '#9fd99f');
-        ctx.fillStyle = grad;
+        // Tiny stripes for lime
+        ctx.strokeStyle = '#9fdf4f';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(rectX + w*0.3, rectY);
+        ctx.lineTo(rectX + w*0.3, rectY + h);
+        ctx.stroke();
+      } else if (skin === 2) { // Light green
+        ctx.fillStyle = '#b4ffb4';
         ctx.beginPath();
         ctx.roundRect(rectX, rectY, w, h, 5);
+        ctx.fill();
+        // Tiny checker dots for light green
+        ctx.fillStyle = '#8fdf8f';
+        ctx.beginPath();
+        ctx.arc(rectX + w*0.3, rectY + h*0.3, 1.5, 0, Math.PI*2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(rectX + w*0.7, rectY + h*0.7, 1.5, 0, Math.PI*2);
         ctx.fill();
       }
 
@@ -317,7 +384,6 @@
       ctx.restore();
     }
 
-    // Helper for rounded rectangles
     CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
       if (w < 2 * r) r = w / 2;
       if (h < 2 * r) r = h / 2;
@@ -337,21 +403,19 @@
     function drawCanvas() {
       ctx.clearRect(0, 0, 800, 600);
 
-      // NO GRID LINES - just cute background
+      // NO GRID LINES
       
-      // Draw food as cute strawberries/hearts
+      // Draw cute strawberries
       food.forEach(f => {
         ctx.save();
         ctx.shadowColor = '#ffb6d9';
         ctx.shadowBlur = 12;
         
-        // Cute strawberry
         ctx.fillStyle = '#ff6f9f';
         ctx.beginPath();
         ctx.arc(f.x*20 + 10, f.y*20 + 8, 7, 0, Math.PI*2);
         ctx.fill();
         
-        // Seeds
         ctx.fillStyle = '#ffffb0';
         ctx.beginPath();
         ctx.arc(f.x*20 + 7, f.y*20 + 5, 1.5, 0, Math.PI*2);
@@ -363,7 +427,6 @@
         ctx.arc(f.x*20 + 9, f.y*20 + 13, 1.5, 0, Math.PI*2);
         ctx.fill();
         
-        // Leaf
         ctx.fillStyle = '#9fd99f';
         ctx.beginPath();
         ctx.ellipse(f.x*20 + 10, f.y*20 + 2, 3, 2, 0, 0, Math.PI*2);
@@ -388,7 +451,6 @@
         const head = p.snake[0];
         drawSnakeSegment(head.x, head.y, p.skin, true, p.direction);
 
-        // Cute name tag
         ctx.save();
         ctx.font = 'bold 16px "Comic Neue", "Fredoka", cursive';
         ctx.fillStyle = '#ff69a4';
@@ -399,8 +461,12 @@
       }
     }
 
+    // Auto-join on page load
     window.onload = () => {
-      socket.emit('join', { name: nameInput.value, skin: currentSkin });
+      setTimeout(() => {
+        const name = nameInput.value.trim() || 'Cutie';
+        socket.emit('join', { name, skin: currentSkin });
+      }, 1000);
     };
   </script>
 </body>
