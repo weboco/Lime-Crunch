@@ -9,10 +9,19 @@ const io = new Server(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
-  }
+  },
+  // Add these for better connection handling
+  allowEIO3: true,
+  transports: ['websocket', 'polling']
 });
 
+// Serve static files
 app.use(express.static(path.join(__dirname)));
+
+// Add a test route
+app.get('/test', (req, res) => {
+  res.send('Server is running!');
+});
 
 const GRID_WIDTH = 40;
 const GRID_HEIGHT = 30;
@@ -147,10 +156,10 @@ function gameTick() {
 }
 
 io.on('connection', (socket) => {
-  console.log('Player connected:', socket.id);
+  console.log('✅ Player connected:', socket.id);
 
   socket.on('join', ({ name, skin }) => {
-    console.log('Player joined:', socket.id, name, skin);
+    console.log('🎮 Player joined:', socket.id, name, skin);
     const player = createPlayer(socket.id, name, skin);
     players[socket.id] = player;
     io.emit('gameState', { players, food });
@@ -172,7 +181,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('respawn', ({ name, skin }) => {
-    console.log('Respawn requested for:', socket.id, name, skin);
+    console.log('🔄 Respawn requested for:', socket.id, name, skin);
     
     // Create new player
     const newPlayer = createPlayer(socket.id, name, skin);
@@ -184,11 +193,11 @@ io.on('connection', (socket) => {
     // Broadcast updated game state to everyone
     io.emit('gameState', { players, food });
     
-    console.log('Respawn complete for:', socket.id);
+    console.log('✅ Respawn complete for:', socket.id);
   });
 
   socket.on('disconnect', () => {
-    console.log('Player disconnected:', socket.id);
+    console.log('❌ Player disconnected:', socket.id);
     delete players[socket.id];
     io.emit('gameState', { players, food });
   });
@@ -200,6 +209,8 @@ setInterval(() => {
 }, TICK_INTERVAL);
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📁 Serving files from: ${__dirname}`);
+  console.log(`🌐 Test URL: http://localhost:${PORT}/test`);
 });
