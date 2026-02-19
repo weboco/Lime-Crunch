@@ -47,23 +47,9 @@ function spawnFood() {
 }
 
 function createPlayer(socketId, name, skin) {
-  let startX, startY;
-  const side = Math.floor(Math.random() * 4);
-  if (side === 0) {
-    startX = Math.floor(GRID_WIDTH / 2) + (Math.random() - 0.5) * 5;
-    startY = 2;
-  } else if (side === 1) {
-    startX = GRID_WIDTH - 3;
-    startY = Math.floor(GRID_HEIGHT / 2) + (Math.random() - 0.5) * 5;
-  } else if (side === 2) {
-    startX = Math.floor(GRID_WIDTH / 2) + (Math.random() - 0.5) * 5;
-    startY = GRID_HEIGHT - 3;
-  } else {
-    startX = 2;
-    startY = Math.floor(GRID_HEIGHT / 2) + (Math.random() - 0.5) * 5;
-  }
-  startX = Math.max(1, Math.min(GRID_WIDTH - 2, Math.floor(startX)));
-  startY = Math.max(1, Math.min(GRID_HEIGHT - 2, Math.floor(startY)));
+  // Spawn in the middle
+  const startX = Math.floor(GRID_WIDTH / 2);
+  const startY = Math.floor(GRID_HEIGHT / 2);
 
   const dir = { dx: 1, dy: 0 };
   const snake = [];
@@ -124,16 +110,19 @@ function gameTick() {
     }
   }
 
+  // Check collisions
   for (let id in players) {
     const p = players[id];
     if (!p.alive) continue;
     const head = p.snake[0];
 
+    // Wall collision
     if (head.x < 0 || head.x >= GRID_WIDTH || head.y < 0 || head.y >= GRID_HEIGHT) {
       p.alive = false;
       continue;
     }
 
+    // Self collision
     for (let i = 1; i < p.snake.length; i++) {
       if (p.snake[i].x === head.x && p.snake[i].y === head.y) {
         p.alive = false;
@@ -142,6 +131,7 @@ function gameTick() {
     }
     if (!p.alive) continue;
 
+    // Collision with other snakes
     for (let otherId in players) {
       if (otherId === id || !players[otherId].alive) continue;
       const otherSnake = players[otherId].snake;
@@ -160,6 +150,7 @@ io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
 
   socket.on('join', ({ name, skin }) => {
+    console.log('Player joined:', socket.id, name, skin);
     const player = createPlayer(socket.id, name, skin);
     players[socket.id] = player;
     io.emit('gameState', { players, food });
@@ -174,16 +165,32 @@ io.on('connection', (socket) => {
 
   socket.on('changeSkin', (skin) => {
     const p = players[socket.id];
-    if (p) {
+    if (p && p.alive) {
       p.skin = skin;
       io.emit('gameState', { players, food });
     }
   });
 
+  socket.on('respawn', ({ name, skin }) => {
+    console.log('Respawn requested for:', socket.id, name, skin);
+    
+    // Create new player
+    const newPlayer = createPlayer(socket.id, name, skin);
+    players[socket.id] = newPlayer;
+    
+    // Send confirmation back to the client
+    socket.emit('respawnConfirmed');
+    
+    // Broadcast updated game state to everyone
+    io.emit('gameState', { players, food });
+    
+    console.log('Respawn complete for:', socket.id);
+  });
+
   socket.on('disconnect', () => {
+    console.log('Player disconnected:', socket.id);
     delete players[socket.id];
     io.emit('gameState', { players, food });
-    console.log('Player disconnected:', socket.id);
   });
 });
 
