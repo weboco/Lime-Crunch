@@ -346,6 +346,32 @@
       padding: 1rem 3rem;
     }
     
+    .welcome-message {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(255, 255, 255, 0.95);
+      padding: 2rem;
+      border-radius: 3rem;
+      text-align: center;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+      border: 4px solid #c7ffb0;
+      pointer-events: none;
+      z-index: 10;
+    }
+    
+    .welcome-message p {
+      color: #4f7a4f;
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+    }
+    
+    .welcome-message small {
+      color: #5f8b5f;
+      font-size: 1rem;
+    }
+    
     /* Mobile responsiveness */
     @media (max-width: 900px) {
       .game-container {
@@ -402,6 +428,12 @@
     <h2>🐍 Cute Square Snakes 🐍</h2>
     <canvas id="gameCanvas" width="800" height="600"></canvas>
 
+    <!-- Welcome Message (appears until Play is pressed) -->
+    <div class="welcome-message" id="welcomeMessage">
+      <p>✨ Press Play to Start! ✨</p>
+      <small>Choose your name and skin above</small>
+    </div>
+
     <div class="panel">
       <div class="left">
         <input type="text" id="nameInput" placeholder="Your name" maxlength="16" value="Cutie">
@@ -433,12 +465,14 @@
     const loadingStatus = document.getElementById('loadingStatus');
     const respawnOverlay = document.getElementById('respawnOverlay');
     const controlMode = document.getElementById('controlMode');
+    const welcomeMessage = document.getElementById('welcomeMessage');
 
     // Better socket connection for Render
     const socket = io({
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 10,
-      reconnectionDelay: 1000
+      reconnectionDelay: 1000,
+      autoConnect: true
     });
 
     let players = {};
@@ -452,11 +486,17 @@
     let animationFrame = null;
     let lastDirectionSend = 0;
     let isDead = false;
+    let hasJoined = false;
 
     shareUrl.textContent = `💖 Share this link with friends! 💖 ${window.location.href}`;
 
-    // Mouse tracking for follow feature
+    // Initially hide game elements until Play is pressed
+    loadingStatus.style.display = 'none';
+    
+    // Mouse tracking for follow feature (only enabled after join)
     canvas.addEventListener('mousemove', (e) => {
+      if (!hasJoined || !myPlayer || !myPlayer.alive) return;
+      
       const rect = canvas.getBoundingClientRect();
       const scaleX = canvas.width / rect.width;
       const scaleY = canvas.height / rect.height;
@@ -466,6 +506,7 @@
     });
 
     function updateDirectionFromMouse() {
+      if (!hasJoined) return;
       if (controlMode.value !== 'mouse') return;
       if (!myPlayer || !myPlayer.alive || !myPlayer.snake || myPlayer.snake.length === 0) return;
       
@@ -513,6 +554,7 @@
 
     // Keyboard controls
     window.addEventListener('keydown', (e) => {
+      if (!hasJoined) return;
       if (controlMode.value !== 'keyboard') return;
       
       const key = e.key;
@@ -540,7 +582,7 @@
     // Connection status
     socket.on('connect', () => {
       console.log('Connected to server!');
-      loadingStatus.textContent = '✅ Connected! Loading game...';
+      loadingStatus.textContent = '✅ Connected! Waiting for you to press Play...';
       myId = socket.id;
     });
 
@@ -562,7 +604,7 @@
         document.querySelectorAll('.skin-btn').forEach(b => b.classList.remove('selected'));
         btn.classList.add('selected');
         currentSkin = parseInt(btn.dataset.skin);
-        if (myId && myPlayer && myPlayer.alive) {
+        if (hasJoined && myPlayer && myPlayer.alive) {
           socket.emit('changeSkin', currentSkin);
         }
       });
@@ -570,20 +612,44 @@
 
     joinBtn.addEventListener('click', () => {
       const name = nameInput.value.trim() || 'Cutie';
-      socket.emit('join', { name, skin: currentSkin });
+      console.log('Joining game with name:', name, 'skin:', currentSkin);
+      
+      // Hide welcome message
+      welcomeMessage.style.display = 'none';
+      
+      // Show loading
+      loadingStatus.style.display = 'block';
       loadingStatus.textContent = '✨ Joining game...';
+      
+      // Disable join button
       joinBtn.disabled = true;
+      
+      // Set joined flag
+      hasJoined = true;
       isDead = false;
+      
+      // Emit join event
+      socket.emit('join', { name, skin: currentSkin });
     });
 
     respawnBtn.addEventListener('click', () => {
+      if (!hasJoined) return;
+      
       const name = nameInput.value.trim() || 'Cutie';
       console.log('Respawning with name:', name, 'skin:', currentSkin);
-      socket.emit('respawn', { name, skin: currentSkin });
+      
+      // Hide respawn overlay
       respawnOverlay.style.display = 'none';
-      loadingStatus.textContent = '✨ Respawning...';
+      
+      // Show loading
       loadingStatus.style.display = 'block';
+      loadingStatus.textContent = '✨ Respawning...';
+      
+      // Reset dead flag
       isDead = false;
+      
+      // Emit respawn event
+      socket.emit('respawn', { name, skin: currentSkin });
     });
 
     socket.on('gameState', (state) => {
@@ -592,11 +658,11 @@
       
       // Update my player reference
       if (myId && players[myId]) {
-        const wasAlive = myPlayer ? myPlayer.alive : true;
+        const wasAlive = myPlayer ? myPlayer.alive : false;
         myPlayer = players[myId];
         
         // Check if I just died
-        if (wasAlive && !myPlayer.alive && !isDead) {
+        if (wasAlive && !myPlayer.alive && !isDead && hasJoined) {
           console.log('Player died, showing respawn overlay');
           respawnOverlay.style.display = 'flex';
           loadingStatus.style.display = 'none';
@@ -612,14 +678,12 @@
           }, 2000);
           isDead = false;
         }
-      }
-      
-      loadingStatus.textContent = '🎮 Game loaded!';
-      setTimeout(() => {
-        if (myPlayer && myPlayer.alive) {
+        
+        // Hide loading when game is ready
+        if (myPlayer.alive) {
           loadingStatus.style.display = 'none';
         }
-      }, 2000);
+      }
       
       updateScoreboard();
       drawCanvas();
@@ -831,8 +895,8 @@
         ctx.restore();
       }
 
-      // Draw mouse follower indicator (only in mouse mode and when alive)
-      if (controlMode.value === 'mouse' && myPlayer && myPlayer.alive && myPlayer.snake && myPlayer.snake.length > 0) {
+      // Draw mouse follower indicator (only in mouse mode and when alive and joined)
+      if (hasJoined && controlMode.value === 'mouse' && myPlayer && myPlayer.alive && myPlayer.snake && myPlayer.snake.length > 0) {
         const head = myPlayer.snake[0];
         const headX = head.x * 20 + 10;
         const headY = head.y * 20 + 10;
@@ -876,22 +940,13 @@
 
     // Animation loop for smooth mouse following
     function gameLoop() {
-      if (controlMode.value === 'mouse') {
+      if (hasJoined && controlMode.value === 'mouse') {
         updateDirectionFromMouse();
       }
       animationFrame = requestAnimationFrame(gameLoop);
     }
     
     gameLoop();
-
-    // Auto-join on page load
-    window.onload = () => {
-      setTimeout(() => {
-        const name = nameInput.value.trim() || 'Cutie';
-        socket.emit('join', { name, skin: currentSkin });
-        joinBtn.disabled = true;
-      }, 1000);
-    };
 
     // Cleanup
     window.onbeforeunload = () => {
