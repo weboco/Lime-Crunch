@@ -561,6 +561,7 @@
       mouseY = (e.clientY - rect.top) * scaleY;
     });
 
+    // ========== IMPROVED MOUSE FOLLOW WITH U-TURN SUPPORT ==========
     function updateDirectionFromMouse() {
       if (!hasJoined) return;
       if (controlMode.value !== 'mouse') return;
@@ -573,32 +574,76 @@
       const dx = mouseX - headX;
       const dy = mouseY - headY;
       
+      // Only update if mouse is far enough from head
       if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+        // Calculate the angle to the mouse
+        const angleToMouse = Math.atan2(dy, dx);
+        
+        // Get current direction angle
+        let currentAngle = 0;
+        if (myPlayer.direction) {
+          if (myPlayer.direction.dx === 1) currentAngle = 0; // Right
+          else if (myPlayer.direction.dx === -1) currentAngle = Math.PI; // Left
+          else if (myPlayer.direction.dy === -1) currentAngle = -Math.PI/2; // Up
+          else if (myPlayer.direction.dy === 1) currentAngle = Math.PI/2; // Down
+        }
+        
+        // Calculate the difference in angles
+        let angleDiff = angleToMouse - currentAngle;
+        
+        // Normalize angle difference to [-PI, PI]
+        while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+        while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+        
+        // Determine which direction to turn
         let newDx = 0, newDy = 0;
         
-        const angle = Math.atan2(dy, dx);
-        const cos = Math.cos(angle);
-        const sin = Math.sin(angle);
-        
-        if (Math.abs(cos) > Math.abs(sin)) {
-          newDx = cos > 0 ? 1 : -1;
-          newDy = 0;
+        // If the mouse is more than 90 degrees away, we need to turn
+        if (Math.abs(angleDiff) > Math.PI/4) {
+          // We need to turn - find the closest 90-degree turn
+          if (angleDiff > 0) {
+            // Turn clockwise
+            if (myPlayer.direction.dx === 1) { // Right -> Down
+              newDx = 0; newDy = 1;
+            } else if (myPlayer.direction.dx === -1) { // Left -> Up
+              newDx = 0; newDy = -1;
+            } else if (myPlayer.direction.dy === 1) { // Down -> Left
+              newDx = -1; newDy = 0;
+            } else if (myPlayer.direction.dy === -1) { // Up -> Right
+              newDx = 1; newDy = 0;
+            }
+          } else {
+            // Turn counter-clockwise
+            if (myPlayer.direction.dx === 1) { // Right -> Up
+              newDx = 0; newDy = -1;
+            } else if (myPlayer.direction.dx === -1) { // Left -> Down
+              newDx = 0; newDy = 1;
+            } else if (myPlayer.direction.dy === 1) { // Down -> Right
+              newDx = 1; newDy = 0;
+            } else if (myPlayer.direction.dy === -1) { // Up -> Left
+              newDx = -1; newDy = 0;
+            }
+          }
         } else {
-          newDx = 0;
-          newDy = sin > 0 ? 1 : -1;
+          // Mouse is roughly in the direction we're facing - use cardinal direction
+          if (Math.abs(angleToMouse) < Math.PI/4) { // Right
+            newDx = 1; newDy = 0;
+          } else if (Math.abs(angleToMouse - Math.PI) < Math.PI/4 || Math.abs(angleToMouse + Math.PI) < Math.PI/4) { // Left
+            newDx = -1; newDy = 0;
+          } else if (angleToMouse > Math.PI/4 && angleToMouse < 3*Math.PI/4) { // Down
+            newDx = 0; newDy = 1;
+          } else if (angleToMouse < -Math.PI/4 && angleToMouse > -3*Math.PI/4) { // Up
+            newDx = 0; newDy = -1;
+          }
         }
         
         targetDirection = { dx: newDx, dy: newDy };
         
-        if (myPlayer.direction) {
-          const currentDir = myPlayer.direction;
-          if (!(targetDirection.dx === -currentDir.dx && targetDirection.dy === -currentDir.dy)) {
-            const now = Date.now();
-            if (now - lastDirectionSend > 50) {
-              socket.emit('direction', targetDirection);
-              lastDirectionSend = now;
-            }
-          }
+        // Send direction update (no reversing check - we WANT to be able to turn around!)
+        const now = Date.now();
+        if (now - lastDirectionSend > 50) {
+          socket.emit('direction', targetDirection);
+          lastDirectionSend = now;
         }
       }
     }
@@ -620,6 +665,7 @@
       if (dx !== 0 || dy !== 0) {
         targetDirection = { dx, dy };
         
+        // Don't allow instant reversing for keyboard (more predictable)
         if (myPlayer && myPlayer.direction) {
           const currentDir = myPlayer.direction;
           if (!(dx === -currentDir.dx && dy === -currentDir.dy)) {
