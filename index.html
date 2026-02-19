@@ -182,7 +182,7 @@
       flex-wrap: wrap;
     }
     
-    input, button {
+    input, button, select {
       background: rgba(255, 255, 255, 0.9);
       border: 3px solid #c7ffb0;
       color: #5f8b5f;
@@ -219,6 +219,15 @@
       cursor: not-allowed;
       transform: none;
       box-shadow: 0 5px 0 #b0e0b0;
+    }
+    
+    select {
+      cursor: pointer;
+      appearance: none;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='%234f7a4f'><path d='M7 10l5 5 5-5z'/></svg>");
+      background-repeat: no-repeat;
+      background-position: right 1rem center;
+      padding-right: 3rem;
     }
     
     .skin-selector {
@@ -401,6 +410,10 @@
           <div class="skin-btn" data-skin="1" title="Lime cutie"></div>
           <div class="skin-btn" data-skin="2" title="Light green cutie"></div>
         </div>
+        <select id="controlMode">
+          <option value="mouse">🐭 Mouse Follow</option>
+          <option value="keyboard" selected>⌨️ Keyboard (Arrows/WASD)</option>
+        </select>
         <button id="joinBtn">✨ Play ✨</button>
       </div>
       <div class="scoreboard" id="scoreboard">Players: 0</div>
@@ -419,6 +432,7 @@
     const shareUrl = document.getElementById('shareUrl');
     const loadingStatus = document.getElementById('loadingStatus');
     const respawnOverlay = document.getElementById('respawnOverlay');
+    const controlMode = document.getElementById('controlMode');
 
     // Better socket connection for Render
     const socket = io({
@@ -436,6 +450,8 @@
     let mouseY = 0;
     let targetDirection = { dx: 1, dy: 0 };
     let animationFrame = null;
+    let lastDirectionSend = 0;
+    let isDead = false;
 
     shareUrl.textContent = `💖 Share this link with friends! 💖 ${window.location.href}`;
 
@@ -447,11 +463,10 @@
       
       mouseX = (e.clientX - rect.left) * scaleX;
       mouseY = (e.clientY - rect.top) * scaleY;
-      
-      updateDirectionFromMouse();
     });
 
     function updateDirectionFromMouse() {
+      if (controlMode.value !== 'mouse') return;
       if (!myPlayer || !myPlayer.alive || !myPlayer.snake || myPlayer.snake.length === 0) return;
       
       const head = myPlayer.snake[0];
@@ -462,25 +477,44 @@
       const dy = mouseY - headY;
       
       // Only update if mouse is far enough from head
-      if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
-        if (Math.abs(dx) > Math.abs(dy)) {
-          targetDirection = dx > 0 ? { dx: 1, dy: 0 } : { dx: -1, dy: 0 };
+      if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+        let newDx = 0, newDy = 0;
+        
+        // Calculate the angle and determine the best direction
+        const angle = Math.atan2(dy, dx);
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        
+        // Choose the closest cardinal direction
+        if (Math.abs(cos) > Math.abs(sin)) {
+          newDx = cos > 0 ? 1 : -1;
+          newDy = 0;
         } else {
-          targetDirection = dy > 0 ? { dx: 0, dy: 1 } : { dx: 0, dy: -1 };
+          newDx = 0;
+          newDy = sin > 0 ? 1 : -1;
         }
+        
+        targetDirection = { dx: newDx, dy: newDy };
         
         // Don't allow reversing
         if (myPlayer.direction) {
           const currentDir = myPlayer.direction;
           if (!(targetDirection.dx === -currentDir.dx && targetDirection.dy === -currentDir.dy)) {
-            socket.emit('direction', targetDirection);
+            // Throttle direction sends
+            const now = Date.now();
+            if (now - lastDirectionSend > 50) {
+              socket.emit('direction', targetDirection);
+              lastDirectionSend = now;
+            }
           }
         }
       }
     }
 
-    // Keyboard controls as backup
+    // Keyboard controls
     window.addEventListener('keydown', (e) => {
+      if (controlMode.value !== 'keyboard') return;
+      
       const key = e.key;
       let dx = 0, dy = 0;
       if (key === 'ArrowUp' || key === 'w' || key === 'W') { dx = 0; dy = -1; }
@@ -492,7 +526,14 @@
       e.preventDefault();
       if (dx !== 0 || dy !== 0) {
         targetDirection = { dx, dy };
-        socket.emit('direction', { dx, dy });
+        
+        // Don't allow reversing
+        if (myPlayer && myPlayer.direction) {
+          const currentDir = myPlayer.direction;
+          if (!(dx === -currentDir.dx && dy === -currentDir.dy)) {
+            socket.emit('direction', { dx, dy });
+          }
+        }
       }
     });
 
@@ -521,7 +562,7 @@
         document.querySelectorAll('.skin-btn').forEach(b => b.classList.remove('selected'));
         btn.classList.add('selected');
         currentSkin = parseInt(btn.dataset.skin);
-        if (myId) {
+        if (myId && myPlayer && myPlayer.alive) {
           socket.emit('changeSkin', currentSkin);
         }
       });
@@ -532,14 +573,17 @@
       socket.emit('join', { name, skin: currentSkin });
       loadingStatus.textContent = '✨ Joining game...';
       joinBtn.disabled = true;
+      isDead = false;
     });
 
     respawnBtn.addEventListener('click', () => {
       const name = nameInput.value.trim() || 'Cutie';
+      console.log('Respawning with name:', name, 'skin:', currentSkin);
       socket.emit('respawn', { name, skin: currentSkin });
       respawnOverlay.style.display = 'none';
       loadingStatus.textContent = '✨ Respawning...';
       loadingStatus.style.display = 'block';
+      isDead = false;
     });
 
     socket.on('gameState', (state) => {
@@ -548,12 +592,25 @@
       
       // Update my player reference
       if (myId && players[myId]) {
+        const wasAlive = myPlayer ? myPlayer.alive : true;
         myPlayer = players[myId];
         
         // Check if I just died
-        if (!myPlayer.alive) {
+        if (wasAlive && !myPlayer.alive && !isDead) {
+          console.log('Player died, showing respawn overlay');
           respawnOverlay.style.display = 'flex';
           loadingStatus.style.display = 'none';
+          isDead = true;
+        }
+        
+        // Check if I just respawned
+        if (!wasAlive && myPlayer.alive) {
+          console.log('Player respawned');
+          loadingStatus.textContent = '🎮 Respawned!';
+          setTimeout(() => {
+            loadingStatus.style.display = 'none';
+          }, 2000);
+          isDead = false;
         }
       }
       
@@ -566,6 +623,12 @@
       
       updateScoreboard();
       drawCanvas();
+    });
+
+    // Listen for respawn confirmation from server
+    socket.on('respawnConfirmed', () => {
+      console.log('Respawn confirmed by server');
+      respawnOverlay.style.display = 'none';
     });
 
     function updateScoreboard() {
@@ -768,38 +831,54 @@
         ctx.restore();
       }
 
-      // Draw mouse follower indicator (for my snake only)
-      if (myPlayer && myPlayer.alive && myPlayer.snake && myPlayer.snake.length > 0) {
+      // Draw mouse follower indicator (only in mouse mode and when alive)
+      if (controlMode.value === 'mouse' && myPlayer && myPlayer.alive && myPlayer.snake && myPlayer.snake.length > 0) {
         const head = myPlayer.snake[0];
         const headX = head.x * 20 + 10;
         const headY = head.y * 20 + 10;
         
         ctx.save();
-        ctx.strokeStyle = '#ff6f9f';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([5, 5]);
-        ctx.beginPath();
-        ctx.moveTo(headX, headY);
-        ctx.lineTo(mouseX, mouseY);
-        ctx.stroke();
         
-        // Draw target heart at mouse position
-        ctx.fillStyle = '#ff6f9f';
-        ctx.shadowColor = '#ffb6d9';
-        ctx.shadowBlur = 10;
-        ctx.beginPath();
-        ctx.arc(mouseX, mouseY, 8, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = 'white';
-        ctx.font = '12px "Comic Neue"';
-        ctx.fillText('❤️', mouseX - 8, mouseY + 4);
+        // Draw direction arrow
+        const angle = Math.atan2(mouseY - headY, mouseX - headX);
+        const distance = Math.sqrt((mouseX - headX)**2 + (mouseY - headY)**2);
+        
+        if (distance > 20) {
+          // Draw dashed line
+          ctx.strokeStyle = '#ff6f9f';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5, 5]);
+          ctx.beginPath();
+          ctx.moveTo(headX, headY);
+          ctx.lineTo(mouseX, mouseY);
+          ctx.stroke();
+          
+          // Draw arrow head
+          ctx.setLineDash([]);
+          ctx.fillStyle = '#ff6f9f';
+          ctx.shadowColor = '#ffb6d9';
+          ctx.shadowBlur = 10;
+          
+          // Draw target circle
+          ctx.beginPath();
+          ctx.arc(mouseX, mouseY, 10, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Draw arrow direction indicator
+          ctx.fillStyle = 'white';
+          ctx.font = '16px "Comic Neue"';
+          ctx.fillText('👉', mouseX - 12, mouseY + 6);
+        }
+        
         ctx.restore();
       }
     }
 
     // Animation loop for smooth mouse following
     function gameLoop() {
-      updateDirectionFromMouse();
+      if (controlMode.value === 'mouse') {
+        updateDirectionFromMouse();
+      }
       animationFrame = requestAnimationFrame(gameLoop);
     }
     
