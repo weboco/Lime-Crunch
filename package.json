@@ -1,7 +1,7 @@
 {
-  "name": "lime-square-snake",
+  "name": "cute-square-snake",
   "version": "1.0.0",
-  "description": "Multiplayer snake game with squares and lime colors",
+  "description": "Cute multiplayer snake game with squares and eyes",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
