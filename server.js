@@ -17,11 +17,11 @@ app.get('/test', (req, res) => res.send('Server is running!'));
 // ========== CONFIG ==========
 const GRID_WIDTH = 40;
 const GRID_HEIGHT = 30;
-const TICK_INTERVAL = 100;        // game logic runs every 100ms
-const BROADCAST_INTERVAL = 200;    // send updates every 200ms (2 ticks)
+const TICK_INTERVAL = 150;          // slower game loop (150ms)
+const BROADCAST_INTERVAL = 300;      // send updates every 300ms (2 ticks)
 const INITIAL_SNAKE_LENGTH = 3;
-const MAX_BOTS = 3;               // max bots (total players = real + bots)
-const TARGET_TOTAL = 4;           // we aim for 4 snakes total
+const MAX_BOTS = 2;                 // only 2 bots max
+const TARGET_TOTAL = 3;             // total snakes = real players + bots
 
 // ========== STATE ==========
 let players = {};
@@ -29,8 +29,8 @@ let food = [];
 let nextFoodId = 0;
 let botIdCounter = 0;
 
-// Cute bot names
-const BOT_NAMES = ['🐼 Panda', '🦊 Fox', '🐱 Cat', '🐶 Dog', '🐰 Bunny', '🐨 Koala'];
+// Cute bot names (short)
+const BOT_NAMES = ['🐼 Panda', '🦊 Fox', '🐱 Cat'];
 
 // ========== HELPERS ==========
 function randomGridPos() {
@@ -38,7 +38,8 @@ function randomGridPos() {
 }
 
 function spawnFood() {
-  while (food.length < 10) {
+  // Keep food count lower (6 instead of 10) to reduce data
+  while (food.length < 6) {
     const pos = randomGridPos();
     let occupied = false;
     for (let id in players) {
@@ -97,31 +98,18 @@ function manageBots() {
 
 // ========== GAME TICK ==========
 function gameTick() {
-  // --- Bot AI (lightweight) ---
+  // --- BOT AI: RANDOM WANDERING (no chasing, no distance math) ---
   for (let id in players) {
     const p = players[id];
     if (!p.isBot || !p.alive) continue;
-    const head = p.snake[0];
-    let best = null, bestDistSq = Infinity;
-    for (let f of food) {
-      const dx = f.x - head.x, dy = f.y - head.y;
-      const d = dx*dx + dy*dy;    // no sqrt!
-      if (d < bestDistSq) { bestDistSq = d; best = f; }
-    }
-    if (best) {
-      const dx = best.x - head.x, dy = best.y - head.y;
-      let newDx = 0, newDy = 0;
-      if (Math.random() < 0.7) {
-        if (Math.abs(dx) > Math.abs(dy)) newDx = dx > 0 ? 1 : -1;
-        else newDy = dy > 0 ? 1 : -1;
-      } else {
-        const dirs = [{dx:1,dy:0},{dx:-1,dy:0},{dx:0,dy:1},{dx:0,dy:-1}];
-        const r = dirs[Math.floor(Math.random() * dirs.length)];
-        newDx = r.dx; newDy = r.dy;
-      }
+    // Change direction randomly every ~1 second (approx 6-7 ticks)
+    if (Math.random() < 0.15) {
+      const dirs = [{dx:1,dy:0},{dx:-1,dy:0},{dx:0,dy:1},{dx:0,dy:-1}];
+      const newDir = dirs[Math.floor(Math.random() * dirs.length)];
       const cur = p.direction;
-      if (!(newDx === -cur.dx && newDy === -cur.dy)) {
-        p.nextDirection = { dx: newDx, dy: newDy };
+      // Prevent immediate reversal
+      if (!(newDir.dx === -cur.dx && newDir.dy === -cur.dy)) {
+        p.nextDirection = newDir;
       }
     }
   }
@@ -183,7 +171,8 @@ function gameTick() {
     }
   }
 
-  // --- Respawn dead bots ---
+  // --- Respawn dead bots immediately (simple deletion) ---
+  // They will be re-added by manageBots() which runs on join/leave and every 10s.
   for (let id in players) {
     if (players[id].isBot && !players[id].alive) delete players[id];
   }
@@ -224,15 +213,23 @@ io.on('connection', (socket) => {
   });
 });
 
-// ========== GAME LOOP (throttled broadcast) ==========
+// ========== GAME LOOP ==========
 let tick = 0;
 setInterval(() => {
   gameTick();
   tick++;
-  if (tick % 2 === 0) {   // broadcast every 2 ticks = 200ms
+  // Broadcast every 2 ticks (300ms)
+  if (tick % 2 === 0) {
     io.emit('gameState', { players, food });
   }
 }, TICK_INTERVAL);
+
+// ========== PERIODIC BOT CHECK (every 10 seconds) ==========
+setInterval(() => {
+  manageBots();
+  // Also broadcast after adjustment to reflect changes
+  io.emit('gameState', { players, food });
+}, 10000);
 
 // ========== START SERVER ==========
 const PORT = process.env.PORT || 3000;
