@@ -17,11 +17,10 @@ app.get('/test', (req, res) => res.send('Server is running!'));
 // ========== CONFIG ==========
 const GRID_WIDTH = 40;
 const GRID_HEIGHT = 30;
-const TICK_INTERVAL = 150;          // slower game loop (150ms)
-const BROADCAST_INTERVAL = 300;      // send updates every 300ms (2 ticks)
+const TICK_INTERVAL = 150;        // 150ms between game ticks
 const INITIAL_SNAKE_LENGTH = 3;
-const MAX_BOTS = 2;                 // only 2 bots max
-const TARGET_TOTAL = 3;             // total snakes = real players + bots
+const MAX_BOTS = 1;               // only 1 bot for minimal load
+const TARGET_TOTAL = 2;           // total = real + bot
 
 // ========== STATE ==========
 let players = {};
@@ -29,17 +28,17 @@ let food = [];
 let nextFoodId = 0;
 let botIdCounter = 0;
 
-// Cute bot names (short)
-const BOT_NAMES = ['🐼 Panda', '🦊 Fox', '🐱 Cat'];
+// Keep a copy of the previous state to compute deltas
+let previousState = { players: {}, food: [] };
 
-// ========== HELPERS ==========
+const BOT_NAMES = ['🐼 Panda'];    // only one name needed
+
 function randomGridPos() {
   return { x: Math.floor(Math.random() * GRID_WIDTH), y: Math.floor(Math.random() * GRID_HEIGHT) };
 }
 
 function spawnFood() {
-  // Keep food count lower (6 instead of 10) to reduce data
-  while (food.length < 6) {
+  while (food.length < 5) {        // only 5 food items
     const pos = randomGridPos();
     let occupied = false;
     for (let id in players) {
@@ -60,8 +59,8 @@ function createPlayer(id, name, skin, isBot = false) {
   for (let i = 0; i < INITIAL_SNAKE_LENGTH; i++) snake.push({ x: startX - i, y: startY });
   return {
     id,
-    name: isBot ? BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)] : (name || 'Anonymous'),
-    skin: isBot ? Math.floor(Math.random() * 3) : (skin || 0),
+    name: isBot ? BOT_NAMES[0] : (name || 'Anonymous'),
+    skin: isBot ? 0 : (skin || 0),
     snake,
     direction: dir,
     nextDirection: dir,
@@ -77,7 +76,6 @@ function manageBots() {
   const currentBots = Object.values(players).filter(p => p.isBot);
   let desiredBots = Math.max(0, Math.min(MAX_BOTS, TARGET_TOTAL - realPlayers.length));
 
-  // Remove excess bots
   if (currentBots.length > desiredBots) {
     let toRemove = currentBots.length - desiredBots;
     for (let id in players) {
@@ -87,7 +85,6 @@ function manageBots() {
       }
     }
   }
-  // Add missing bots
   if (currentBots.length < desiredBots) {
     for (let i = 0; i < desiredBots - currentBots.length; i++) {
       const botId = `bot_${botIdCounter++}`;
@@ -98,16 +95,14 @@ function manageBots() {
 
 // ========== GAME TICK ==========
 function gameTick() {
-  // --- BOT AI: RANDOM WANDERING (no chasing, no distance math) ---
+  // --- Bot AI: random wandering ---
   for (let id in players) {
     const p = players[id];
     if (!p.isBot || !p.alive) continue;
-    // Change direction randomly every ~1 second (approx 6-7 ticks)
     if (Math.random() < 0.15) {
       const dirs = [{dx:1,dy:0},{dx:-1,dy:0},{dx:0,dy:1},{dx:0,dy:-1}];
       const newDir = dirs[Math.floor(Math.random() * dirs.length)];
       const cur = p.direction;
-      // Prevent immediate reversal
       if (!(newDir.dx === -cur.dx && newDir.dy === -cur.dy)) {
         p.nextDirection = newDir;
       }
@@ -152,16 +147,13 @@ function gameTick() {
     const p = players[id];
     if (!p.alive) continue;
     const head = p.snake[0];
-    // Walls
     if (head.x < 0 || head.x >= GRID_WIDTH || head.y < 0 || head.y >= GRID_HEIGHT) {
       p.alive = false; continue;
     }
-    // Self
     for (let i = 1; i < p.snake.length; i++) {
       if (p.snake[i].x === head.x && p.snake[i].y === head.y) { p.alive = false; break; }
     }
     if (!p.alive) continue;
-    // Other snakes
     for (let otherId in players) {
       if (otherId === id || !players[otherId].alive) continue;
       for (let seg of players[otherId].snake) {
@@ -171,13 +163,75 @@ function gameTick() {
     }
   }
 
-  // --- Respawn dead bots immediately (simple deletion) ---
-  // They will be re-added by manageBots() which runs on join/leave and every 10s.
+  // --- Respawn dead bots (remove them) ---
   for (let id in players) {
     if (players[id].isBot && !players[id].alive) delete players[id];
   }
 
   spawnFood();
+}
+
+// ========== BUILD DELTA ==========
+function buildDelta() {
+  const delta = { players: {}, food: [] };
+  const currentPlayers = players;
+  const prevPlayers = previousState.players;
+  const currentFood = food;
+  const prevFood = previousState.food;
+
+  // 1. Detect changed or new players
+  for (let id in currentPlayers) {
+    const p = currentPlayers[id];
+    const prev = prevPlayers[id];
+    if (!prev) {
+      // New player
+      delta.players[id] = { 
+        id: p.id, name: p.name, skin: p.skin, snake: p.snake, 
+        score: p.score, alive: p.alive, isBot: p.isBot 
+      };
+    } else {
+      // Check if snake or score changed
+      if (p.score !== prev.score || p.alive !== prev.alive || 
+          JSON.stringify(p.snake) !== JSON.stringify(prev.snake)) {
+        // Send only the changed fields (but for simplicity, send full player again)
+        // For minimal delta, we could send only changed attributes, but full player is still small.
+        delta.players[id] = { id: p.id, name: p.name, skin: p.skin, snake: p.snake, score: p.score, alive: p.alive, isBot: p.isBot };
+      }
+    }
+  }
+
+  // 2. Detect removed players
+  for (let id in prevPlayers) {
+    if (!currentPlayers[id]) {
+      delta.players[id] = null; // marker for removal
+    }
+  }
+
+  // 3. Detect food changes
+  const currentFoodIds = new Set(currentFood.map(f => f.id));
+  const prevFoodIds = new Set(prevFood.map(f => f.id));
+
+  // New food
+  for (let f of currentFood) {
+    if (!prevFoodIds.has(f.id)) {
+      delta.food.push(f);
+    }
+  }
+  // Removed food (we mark as null)
+  for (let f of prevFood) {
+    if (!currentFoodIds.has(f.id)) {
+      delta.food.push({ id: f.id, removed: true });
+    }
+  }
+
+  // Store current state as previous for next tick
+  // Deep copy to avoid reference issues
+  previousState = {
+    players: JSON.parse(JSON.stringify(currentPlayers)),
+    food: JSON.parse(JSON.stringify(currentFood))
+  };
+
+  return delta;
 }
 
 // ========== SOCKET.IO ==========
@@ -187,7 +241,8 @@ io.on('connection', (socket) => {
   socket.on('join', ({ name, skin }) => {
     players[socket.id] = createPlayer(socket.id, name, skin, false);
     manageBots();
-    io.emit('gameState', { players, food });
+    // Send full initial state (delta would be empty)
+    io.emit('gameState', { players, food }); // first full state
   });
 
   socket.on('direction', ({ dx, dy }) => {
@@ -197,38 +252,42 @@ io.on('connection', (socket) => {
 
   socket.on('changeSkin', (skin) => {
     const p = players[socket.id];
-    if (p && p.alive) { p.skin = skin; io.emit('gameState', { players, food }); }
+    if (p && p.alive) { p.skin = skin; /* delta will capture */ }
   });
 
   socket.on('respawn', ({ name, skin }) => {
     players[socket.id] = createPlayer(socket.id, name, skin, false);
     socket.emit('respawnConfirmed');
+    // Force full state broadcast
     io.emit('gameState', { players, food });
   });
 
   socket.on('disconnect', () => {
     delete players[socket.id];
     manageBots();
-    io.emit('gameState', { players, food });
+    // No immediate broadcast; next tick will send delta
   });
 });
 
-// ========== GAME LOOP ==========
+// ========== GAME LOOP WITH DELTA BROADCAST ==========
 let tick = 0;
 setInterval(() => {
   gameTick();
   tick++;
-  // Broadcast every 2 ticks (300ms)
+  // Broadcast delta every 2 ticks (300ms)
   if (tick % 2 === 0) {
-    io.emit('gameState', { players, food });
+    const delta = buildDelta();
+    // Only send if there are actual changes (to avoid empty broadcasts)
+    const hasChanges = Object.keys(delta.players).length > 0 || delta.food.length > 0;
+    if (hasChanges) {
+      io.emit('gameDelta', delta);
+    }
   }
 }, TICK_INTERVAL);
 
-// ========== PERIODIC BOT CHECK (every 10 seconds) ==========
+// ========== PERIODIC BOT CHECK ==========
 setInterval(() => {
   manageBots();
-  // Also broadcast after adjustment to reflect changes
-  io.emit('gameState', { players, food });
 }, 10000);
 
 // ========== START SERVER ==========
