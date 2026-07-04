@@ -25,14 +25,21 @@ const GRID_HEIGHT = 30;
 const TICK_INTERVAL = 100;
 const INITIAL_SNAKE_LENGTH = 3;
 
-// Config for dynamic bots
-const TARGET_TOTAL_PLAYERS = 6; // How many total snakes we want on the map
-const MAX_BOTS = 5;             // Maximum bots allowed
+// === OPTIMIZED: Fewer total snakes ===
+const TARGET_TOTAL_PLAYERS = 4; // Changed from 6 to 4
+const MAX_BOTS = 3;
 
 let players = {};
 let food = [];
 let nextFoodId = 0;
 let botIdCounter = 0;
+
+// === OPTIMIZED: Bot names with cute emojis ===
+const botNames = [
+  '🐼 Panda', '🦊 Fox', '🐱 Cat', '🐶 Dog', 
+  '🐰 Bunny', '🐨 Koala', '🦄 Unicorn', '🐧 Penguin',
+  '🍕 Pizza', '🌮 Taco', '🍣 Sushi', '🧁 Cupcake'
+];
 
 function randomGridPos() {
   return {
@@ -69,29 +76,27 @@ function createPlayer(socketId, name, skin, isBot = false) {
   
   return {
     id: socketId,
-    name: isBot ? `🤖 Bot ${Math.floor(Math.random() * 100)}` : (name || 'Anonymous'),
+    name: isBot ? botNames[Math.floor(Math.random() * botNames.length)] : (name || 'Anonymous'),
     skin: isBot ? Math.floor(Math.random() * 3) : (skin || 0),
     snake,
     direction: dir,
     nextDirection: dir,
     alive: true,
     score: 0,
-    isBot: isBot, // Flag to identify bots
-    moveCounter: 0 // For AI logic
+    isBot: isBot,
+    moveCounter: 0
   };
 }
 
-// ===================== DYNAMIC BOT MANAGEMENT =====================
+// ===================== BOT MANAGEMENT (optimized) =====================
 function manageBots() {
-  // Count current real players and bots
   const realPlayers = Object.values(players).filter(p => !p.isBot);
   const currentBots = Object.values(players).filter(p => p.isBot);
   
-  // Calculate how many bots we need
   let desiredBots = TARGET_TOTAL_PLAYERS - realPlayers.length;
   desiredBots = Math.max(0, Math.min(MAX_BOTS, desiredBots));
   
-  // 1. If we have too many bots, remove the extras
+  // Remove extra bots
   if (currentBots.length > desiredBots) {
     const botsToRemove = currentBots.length - desiredBots;
     let removed = 0;
@@ -101,35 +106,35 @@ function manageBots() {
         removed++;
       }
     }
-    console.log(`🤖 Removed ${removed} bots. Real players: ${realPlayers.length}`);
   }
   
-  // 2. If we need more bots, spawn them
+  // Add missing bots
   if (currentBots.length < desiredBots) {
     const botsToAdd = desiredBots - currentBots.length;
     for (let i = 0; i < botsToAdd; i++) {
       const botId = `bot_${botIdCounter++}`;
       players[botId] = createPlayer(botId, null, null, true);
     }
-    console.log(`🤖 Added ${botsToAdd} bots. Real players: ${realPlayers.length}`);
   }
 }
 // ================================================================
 
 function gameTick() {
-  // ---- BOT AI LOGIC ----
+  // ---- OPTIMIZED BOT AI (no Math.sqrt!) ----
   for (let id in players) {
     const p = players[id];
     if (!p.isBot || !p.alive) continue;
     
     const head = p.snake[0];
     let nearest = null;
-    let nearestDist = Infinity;
+    let nearestDistSq = Infinity; // Use squared distance
     
     for (let f of food) {
-      const dist = Math.sqrt((f.x - head.x)**2 + (f.y - head.y)**2);
-      if (dist < nearestDist) {
-        nearestDist = dist;
+      const dx = f.x - head.x;
+      const dy = f.y - head.y;
+      const distSq = dx*dx + dy*dy; // No square root!
+      if (distSq < nearestDistSq) {
+        nearestDistSq = distSq;
         nearest = f;
       }
     }
@@ -139,7 +144,6 @@ function gameTick() {
       const dy = nearest.y - head.y;
       let newDx = 0, newDy = 0;
       
-      // 70% chase food, 30% random move to avoid getting stuck
       if (Math.random() < 0.7) {
         if (Math.abs(dx) > Math.abs(dy)) {
           newDx = dx > 0 ? 1 : -1;
@@ -232,20 +236,24 @@ function gameTick() {
     }
   }
 
-  // Respawn dead bots automatically
+  // Respawn dead bots
   for (let id in players) {
     const p = players[id];
     if (p.isBot && !p.alive) {
-      // Remove dead bot, a new one will spawn in manageBots()
       delete players[id];
     }
   }
 
   spawnFood();
   
-  // ----- DYNAMIC BOT ADJUSTMENT (runs every tick) -----
-  manageBots();
+  // === OPTIMIZED: Don't call manageBots() here anymore ===
+  // It's called only on player join/leave + every 10 seconds
 }
+
+// === OPTIMIZED: Separate interval for bot management (every 10 seconds) ===
+setInterval(() => {
+  manageBots();
+}, 10000);
 
 io.on('connection', (socket) => {
   console.log('✅ Player connected:', socket.id);
@@ -253,10 +261,7 @@ io.on('connection', (socket) => {
   socket.on('join', ({ name, skin }) => {
     console.log('🎮 Player joined:', socket.id, name, skin);
     players[socket.id] = createPlayer(socket.id, name, skin, false);
-    
-    // Adjust bots immediately when a real player joins
-    manageBots();
-    
+    manageBots(); // Only here
     io.emit('gameState', { players, food });
   });
 
@@ -286,17 +291,21 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log('❌ Player disconnected:', socket.id);
     delete players[socket.id];
-    
-    // Fill the gap with bots immediately
-    manageBots();
-    
+    manageBots(); // Only here
     io.emit('gameState', { players, food });
   });
 });
 
+// === OPTIMIZED: Game loop with throttled broadcasts ===
+let tickCounter = 0;
 setInterval(() => {
   gameTick();
-  io.emit('gameState', { players, food });
+  tickCounter++;
+  
+  // === KEY FIX: Send state only every 2 ticks (200ms) ===
+  if (tickCounter % 2 === 0) {
+    io.emit('gameState', { players, food });
+  }
 }, TICK_INTERVAL);
 
 const PORT = process.env.PORT || 3000;
