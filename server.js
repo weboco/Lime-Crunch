@@ -10,18 +10,23 @@ const io = new Server(server, {
     origin: "*",
     methods: ["GET", "POST"]
   },
-  // Add these for better connection handling
   allowEIO3: true,
   transports: ['websocket', 'polling']
 });
 
-// Serve static files
 app.use(express.static(path.join(__dirname)));
 
-// Add a test route
 app.get('/test', (req, res) => {
   res.send('Server is running!');
 });
+
+// ========== API endpoint for bot to check real players ==========
+app.get('/api/status', (req, res) => {
+  const total = Object.keys(players).length;
+  const real = Object.values(players).filter(p => !p.isBot).length;
+  res.json({ total, realPlayers: real });
+});
+// ===============================================================
 
 const GRID_WIDTH = 40;
 const GRID_HEIGHT = 30;
@@ -55,8 +60,8 @@ function spawnFood() {
   }
 }
 
-function createPlayer(socketId, name, skin) {
-  // Spawn in the middle
+// ========== Modified to accept isBot flag ==========
+function createPlayer(socketId, name, skin, isBot = false) {
   const startX = Math.floor(GRID_WIDTH / 2);
   const startY = Math.floor(GRID_HEIGHT / 2);
 
@@ -73,9 +78,11 @@ function createPlayer(socketId, name, skin) {
     direction: dir,
     nextDirection: dir,
     alive: true,
-    score: 0
+    score: 0,
+    isBot: isBot
   };
 }
+// ====================================================
 
 function gameTick() {
   const moves = [];
@@ -119,19 +126,16 @@ function gameTick() {
     }
   }
 
-  // Check collisions
   for (let id in players) {
     const p = players[id];
     if (!p.alive) continue;
     const head = p.snake[0];
 
-    // Wall collision
     if (head.x < 0 || head.x >= GRID_WIDTH || head.y < 0 || head.y >= GRID_HEIGHT) {
       p.alive = false;
       continue;
     }
 
-    // Self collision
     for (let i = 1; i < p.snake.length; i++) {
       if (p.snake[i].x === head.x && p.snake[i].y === head.y) {
         p.alive = false;
@@ -140,7 +144,6 @@ function gameTick() {
     }
     if (!p.alive) continue;
 
-    // Collision with other snakes
     for (let otherId in players) {
       if (otherId === id || !players[otherId].alive) continue;
       const otherSnake = players[otherId].snake;
@@ -158,12 +161,14 @@ function gameTick() {
 io.on('connection', (socket) => {
   console.log('✅ Player connected:', socket.id);
 
-  socket.on('join', ({ name, skin }) => {
-    console.log('🎮 Player joined:', socket.id, name, skin);
-    const player = createPlayer(socket.id, name, skin);
+  // ========== Accept isBot from client ==========
+  socket.on('join', ({ name, skin, isBot }) => {
+    console.log('🎮 Player joined:', socket.id, name, skin, isBot ? '(bot)' : '(human)');
+    const player = createPlayer(socket.id, name, skin, isBot || false);
     players[socket.id] = player;
     io.emit('gameState', { players, food });
   });
+  // =============================================
 
   socket.on('direction', ({ dx, dy }) => {
     const p = players[socket.id];
@@ -182,17 +187,10 @@ io.on('connection', (socket) => {
 
   socket.on('respawn', ({ name, skin }) => {
     console.log('🔄 Respawn requested for:', socket.id, name, skin);
-    
-    // Create new player
-    const newPlayer = createPlayer(socket.id, name, skin);
+    const newPlayer = createPlayer(socket.id, name, skin, false);
     players[socket.id] = newPlayer;
-    
-    // Send confirmation back to the client
     socket.emit('respawnConfirmed');
-    
-    // Broadcast updated game state to everyone
     io.emit('gameState', { players, food });
-    
     console.log('✅ Respawn complete for:', socket.id);
   });
 
